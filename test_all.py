@@ -22,6 +22,7 @@ class Sum:
 
     @cache.stateful
     def add(self, term):
+        global state
         state = True
         self.value += term
 

@@ -25,12 +25,14 @@ class Cache:
             key.append(str(len(kwargs)))
 
             arguments = args
+            object_state = None
             if class_name is not None:
                 if self.is_tracked_class(filepath, class_name):
                     method_self = args[0]
                     arguments = args[1:]
-                    self_id = self.get_tracked_object_signature(method_self)
-                    key.append(self_id)
+                    self_signature = self.get_tracked_object_signature(method_self)
+                    key.append(self_signature)
+                    object_state = self.tracked_objects[id(method_self)]
 
             for argument in arguments:
                 argument_id = get_signature(argument)
@@ -45,6 +47,8 @@ class Cache:
             if serialized_key in self.shelf:
                 result = self.shelf[serialized_key]
             else:
+                if object_state is not None:
+                    object_state.sync()
                 result = f(*args, **kwargs)
                 self.shelf[serialized_key] = result
             return result
@@ -60,12 +64,10 @@ class Cache:
             it = args[0]
 
             if id(it) not in self.tracked_objects:
-                self.tracked_objects[id(it)] = ObjectState()
+                self.tracked_objects[id(it)] = ObjectState(it)
             state = self.tracked_objects[id(it)]
 
-            state.append(method.__name__, *args[1:], **kwargs)
-
-            return method(*args, **kwargs)
+            state.append(method, args[1:], kwargs)
 
         return wrapper
 
@@ -74,7 +76,7 @@ class Cache:
 
     def get_tracked_object_signature(self, it):
         if id(it) not in self.tracked_objects:
-            self.tracked_objects[id(it)] = ObjectState()
+            self.tracked_objects[id(it)] = ObjectState(it)
         return self.tracked_objects[id(it)].serialize()
 
     def save(self):
@@ -89,14 +91,25 @@ class Cache:
 
 class ObjectState:
 
-    def __init__(self):
+    def __init__(self, object):
         self.value = ""
+        self.object = object
+        self.calls = []
 
-    def append(self, method_name, *args, **kwargs):
-        self.value += method_name
-        self.value += str(len(args))
+    def sync(self):
+        for (method, args, kwargs) in self.calls:
+            method(self.object, *args, **kwargs)
+        self.calls = []
+
+    def append(self, method, proper_args, kwargs):
+        self.calls.append(
+            (method, proper_args, kwargs)
+        )
+
+        self.value += method.__name__
+        self.value += str(len(proper_args))
         self.value += str(len(kwargs))
-        for argument in args:
+        for argument in proper_args:
             self.value += get_signature(argument)
         for keyword in kwargs:
             self.value += keyword
