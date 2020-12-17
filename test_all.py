@@ -2,7 +2,10 @@ from os import remove
 
 from caching import Cache
 
-remove("cache")
+try:
+    remove("cache")
+except FileNotFoundError:
+    pass
 
 cache = Cache("cache")
 
