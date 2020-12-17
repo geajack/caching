@@ -119,7 +119,7 @@ class CacheKey:
 
 def get_signature(argument):
     try:
-        argument_id = argument.cache_id
+        argument_id = argument.cache_signature
     except AttributeError:
         argument_id = repr(argument)
     return argument_id
