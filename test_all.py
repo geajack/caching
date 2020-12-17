@@ -24,13 +24,4 @@ def test_caching():
     state = False
     f(0)
     assert state is False
-
-
-def test_delete_cache():
-    f(0)
-    cache.save()
-    remove("cache")
-    state = False
-    f(0)
-    assert state is True
     
