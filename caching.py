@@ -71,6 +71,9 @@ class Cache:
 
         return wrapper
 
+    def sync(self, object):
+        self.tracked_objects[id(object)].sync()
+
     def is_tracked_class(self, filepath, class_name):
         return (filepath, class_name) in self.tracked_classes
 
