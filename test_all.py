@@ -33,6 +33,12 @@ class Sum:
         Sum.global_state += 1
         return self.value
 
+square_state = False
+@cache.cached
+def square(summer):
+    global square_state
+    square_state = True
+    return summer.get_value()**2
 
 def test_function():
     assert f(1) == 1
@@ -65,3 +71,16 @@ def test_stateful():
 
     total.add(4)
     assert total.get_value() == 10
+
+def test_auto_argument():
+    global square_state
+
+    total = Sum()
+    total.add(2)
+    assert square(total) == 4
+
+    square_state = False
+    assert square(total) == 4
+    assert square_state is False
+
+    state = False
