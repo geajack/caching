@@ -1,6 +1,6 @@
 from os import remove
 
-from caching import Cache
+from new_caching import Cache, auto, state_modifying, nonlazy
 
 try:
     remove("cache")
@@ -11,28 +11,26 @@ cache = Cache("cache")
 
 state = False
 
-@cache.cache
+@cache.cached
 def f(x):
     global state
     state = True
     return x**2
-
-
+@auto
 class Sum:
 
-    def __init__(self):
-        self.value = 0
+    global_state = 0
 
-    @cache.stateful
+    def __init__(self, value=0):
+        self.value = value
+
+    @state_modifying
     def add(self, term):
-        global state
-        state = True
         self.value += term
 
-    @cache.cache
+    @cache.cached
     def get_value(self):
-        global state
-        state = True
+        Sum.global_state += 1
         return self.value
 
 
