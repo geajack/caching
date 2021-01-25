@@ -173,9 +173,10 @@ AUTO_CLASSES = []
 OBJECT_TRACKER = ObjectTracker()
 
 cache = Cache("cache")
-
 @auto
 class Sum:
+
+    global_state = 0
 
     def __init__(self, value=0):
         self.value = value
@@ -186,10 +187,14 @@ class Sum:
 
     @cache.cached
     def get_value(self):
+        Sum.global_state += 1
         return self.value
 
 
 if __name__ == "__main__":
     s = Sum()
     s.add(1)
-    assert s.get_value() == 1
+    s.add(1)
+    assert s.get_value() == 2
+    assert s.get_value() == 2
+    assert Sum.global_state == 1, Sum.global_state
