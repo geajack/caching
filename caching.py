@@ -1,141 +1,173 @@
-import shelve
+
+import itertools
 import inspect
+import shelve
 
-class Cache:
+class CachedFunction:
 
-    def __init__(self, path):
-        self.path = path
-        self.shelf = shelve.open(path)
-        self.tracked_classes = set()
-        self.tracked_objects = {}
+    def __init__(self, cache, function):
+        self.cache = cache
+        self.non_lazy = NonLazyFunction(function).get_wrapper()
 
-    def cache(self, f):
-        filepath   = f.__globals__['__file__']
-        name       = f.__qualname__
-        try:
-            class_name = f.__qualname__.rsplit(".", 2)[-2]
-        except IndexError:
-            class_name = None
+        filepath   = function.__globals__['__file__']
+        name       = function.__qualname__
+        self.function_id = filepath + "/" + name
 
+    def get_wrapper(self):
         def wrapper(*args, **kwargs):
-            key = CacheKey()
-            key.append(filepath)
-            key.append(name)
-            key.append(str(len(args)))
-            key.append(str(len(kwargs)))
-
-            arguments = args
-            object_state = None
-            if class_name is not None:
-                if self.is_tracked_class(filepath, class_name):
-                    method_self = args[0]
-                    arguments = args[1:]
-                    self_signature = self.get_tracked_object_signature(method_self)
-                    key.append(self_signature)
-                    object_state = self.tracked_objects[id(method_self)]
-
-            for argument in arguments:
-                argument_id = get_signature(argument)
-                key.append(argument_id)
-
-            for keyword in kwargs:
-                argument_id = get_signature(kwargs[keyword])
-                key.append(keyword)
-                key.append(argument_id)
-
-            serialized_key = key.serialize()
-            if serialized_key in self.shelf:
-                result = self.shelf[serialized_key]
+            if self.cache.has(self.function_id, args, kwargs):
+                return self.cache.get(self.function_id, args, kwargs)
             else:
-                if object_state is not None:
-                    object_state.sync()
-                result = f(*args, **kwargs)
-                self.shelf[serialized_key] = result
-            return result
-
+                result = self.non_lazy(*args, **kwargs)
+                self.cache.set(self.function_id, args, kwargs, result)
+                return result
         return wrapper
 
-    def stateful(self, method):
-        filepath   = method.__globals__['__file__']
-        class_name = method.__qualname__.rsplit(".", 2)[-2]
-        self.tracked_classes.add((filepath, class_name))
 
+class StateModifyingFunction:
+
+    def __init__(self, method):
+        self.method = method
+
+    def get_wrapper(self):
         def wrapper(*args, **kwargs):
-            it = args[0]
-
-            if id(it) not in self.tracked_objects:
-                self.tracked_objects[id(it)] = ObjectState(it)
-            state = self.tracked_objects[id(it)]
-
-            state.append(method, args[1:], kwargs)
-
+            OBJECT_TRACKER.add(
+                args[0],
+                self.method,
+                args,
+                kwargs
+            )
         return wrapper
 
-    def sync(self, object):
-        self.tracked_objects[id(object)].sync()
 
-    def is_tracked_class(self, filepath, class_name):
-        return (filepath, class_name) in self.tracked_classes
+class NonLazyFunction:
 
-    def get_tracked_object_signature(self, it):
-        if id(it) not in self.tracked_objects:
-            self.tracked_objects[id(it)] = ObjectState(it)
-        return self.tracked_objects[id(it)].serialize()
+    def __init__(self, function):
+        self.tracker = OBJECT_TRACKER
+        self.function = function
 
-    def save(self):
-        self.shelf.sync()
-
-    def close(self):
-        self.shelf.close()
-
-    def __del__(self):
-        self.close()
+    def get_wrapper(self):
+        def wrapper(*args, **kwargs):
+            for item in itertools.chain(args, kwargs.values()):
+                self.tracker.sync(item)
+            return self.function(*args, **kwargs)
+        return wrapper
 
 
 class ObjectState:
 
-    def __init__(self, object):
-        self.value = ""
-        self.object = object
+    def __init__(self, klass):
+        try:
+            filepath = inspect.getfile(klass)
+        except TypeError:
+            filepath = ""
+        name = klass.__qualname__
+        self.subkey = filepath + "/" + name
         self.calls = []
+
+    def get_subkey(self):
+        return self.subkey
 
     def sync(self):
         for (method, args, kwargs) in self.calls:
-            method(self.object, *args, **kwargs)
+            method(*args, *kwargs)
         self.calls = []
 
-    def append(self, method, proper_args, kwargs):
-        self.calls.append(
-            (method, proper_args, kwargs)
-        )
-
-        self.value += method.__name__
-        self.value += str(len(proper_args))
-        self.value += str(len(kwargs))
-        for argument in proper_args:
-            self.value += get_signature(argument)
+    def add(self, method, args, kwargs):
+        self.calls.append((method, args, kwargs))
+        self.subkey += method.__name__
+        for arg in args:
+            self.subkey += get_subkey(arg)
         for keyword in kwargs:
-            self.value += keyword
-            self.value += get_signature(kwargs[keyword])
+            self.subkey += keyword
+            self.subkey += get_subkey(kwargs[keyword])
 
-    def serialize(self):
-        return self.value
+
+class ObjectTracker:
+
+    def __init__(self):
+        self.tracked = {}
+
+    def sync(self, item):
+        if id(item) in self.tracked:
+            self.tracked[id(item)].sync()
+
+    def add(self, item, method, args, kwargs):
+        key = id(item)
+        if key not in self.tracked:
+            self.track(item)
+        self.tracked[key].add(method, args, kwargs)
+
+    def has(self, item):
+        return id(item) in self.tracked
+
+    def track(self, item):
+        self.tracked[id(item)] = ObjectState(type(item))
+
+    def get_subkey(self, item):
+        return self.tracked[id(item)].get_subkey()
+
+
+class Cache:
+
+    def __init__(self, filepath):
+        self.shelf = shelve.open(filepath)
+    
+    def cached(self, function):
+        return CachedFunction(self, function).get_wrapper()
+
+    def has(self, function_id, args, kwargs):
+        key = CacheKey(function_id, args, kwargs)
+        return key.serialize() in self.shelf
+
+    def get(self, function_id, args, kwargs):
+        key = CacheKey(function_id, args, kwargs)
+        return self.shelf[key.serialize()]
+
+    def set(self, function_id, args, kwargs, value):
+        key = CacheKey(function_id, args, kwargs)
+        self.shelf[key.serialize()] = value
+
 
 class CacheKey:
 
-    def __init__(self):
-        self.value = ""
-
-    def append(self, signature):
-        self.value += signature
+    def __init__(self, function_id, args, kwargs):
+        self.serialized  = function_id
+        for arg in args:
+            self.serialized += get_subkey(arg)
+        for keyword in kwargs:
+            self.serialized += keyword
+            self.serialized += get_subkey(kwargs[keyword])
 
     def serialize(self):
-        return self.value
+        return self.serialized
 
 
-def get_signature(argument):
-    try:
-        signature = argument.cache_signature
-    except AttributeError:
-        signature = repr(argument)
-    return signature
+def get_subkey(item):
+    if type(item) in AUTO_CLASSES:
+        if not OBJECT_TRACKER.has(item):
+            OBJECT_TRACKER.track(item)
+        return OBJECT_TRACKER.get_subkey(item)
+    else:
+        try:
+            subkey = item.cache_signature
+        except AttributeError:
+            subkey = repr(item)
+        return subkey
+
+
+def auto(klass):
+    AUTO_CLASSES.append(klass)
+    return klass
+
+
+def state_modifying(method):
+    return StateModifyingFunction(method).get_wrapper()
+
+
+def nonlazy(method):
+    return NonLazyFunction(method).get_wrapper()
+
+
+AUTO_CLASSES = []
+OBJECT_TRACKER = ObjectTracker()

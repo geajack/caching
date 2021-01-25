@@ -1,6 +1,6 @@
 from os import remove
 
-from new_caching import Cache, auto, state_modifying, nonlazy
+from caching import Cache, auto, state_modifying, nonlazy
 
 try:
     remove("cache")
